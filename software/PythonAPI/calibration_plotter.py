@@ -1,11 +1,11 @@
-from open_micro_stage_api import OpenMicroStageInterface
+from open_micro_manipulator import OpenMicroStageInterface
 import matplotlib.pyplot as plt
 plt.rcParams['figure.dpi'] = 200
 
 def plot_calibration_data(ax_encoder_counts, ax_field_angel, label, data):
     # Plot on the provided Axes object
     if ax_encoder_counts is not None:
-        ax_encoder_counts.plot(data[0], data[2], label=label)
+        ax_encoder_counts.plot(data.motor_angles, data.raw_encoder_counts, label=label)
         ax_encoder_counts.set_xlabel('Motor Angle [rad]')
         ax_encoder_counts.set_ylabel('Encoder Counts Raw')
         ax_encoder_counts.set_title('Encoder Count Plot')
@@ -14,7 +14,7 @@ def plot_calibration_data(ax_encoder_counts, ax_field_angel, label, data):
 
     # Plot on the provided Axes object
     if ax_field_angel is not None:
-        ax_field_angel.plot(data[0], data[1], label=label)
+        ax_field_angel.plot(data.motor_angles, data.field_angles, label=label)
         ax_field_angel.set_xlabel('Motor Angle [rad]')
         ax_field_angel.set_ylabel('Motor Field Angle [rad]')
         ax_field_angel.set_title('Field Angle Plot')
