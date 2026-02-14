@@ -44,15 +44,35 @@ It has simple controlls to move the device around, while also displaying a live 
 
 The lightweight Python API handles all serial communication and provides convenient command execution and debug message printing.
 The interface includes functions to home, move, and calibrate the device, as well as to query device information.
-Simply copy the [open_micro_stage_api.py](software/PythonAPI/open_micro_stage_api.py) file into your project (also install the dependencies in requirements.txt), and you’re ready to get started.
+It is structured as a standard Python package for easy installation.
+
+### Installation
+
+You can install the package directly from the repository using pip:
+
+```bash
+pip install git+https://github.com/0x23/MicroManipulatorStepper.git#subdirectory=software/PythonAPI
+```
+
+Or, if you have cloned the repository locally:
+
+```bash
+pip install ./software/PythonAPI
+```
 
 ## Usage Example
 ```python
-from open_micro_stage_api import OpenMicroStageInterface
+from open_micro_manipulator import OpenMicroStageInterface
+from open_micro_manipulator.exceptions import DeviceNotFoundError
 
 # create interface and connect
-oms = OpenMicroStageInterface(show_communication=True, show_log_messages=True)
-oms.connect('/dev/ttyACM0')
+# Use mock=True for simulation/digital twin
+oms = OpenMicroStageInterface(show_communication=True, show_log_messages=True, mock=False)
+
+try:
+    oms.connect('/dev/ttyACM0')
+except DeviceNotFoundError:
+    print("Could not connect to device")
 
 # run this once to calibrate joints
 # for i in range(3): oms.calibrate_joint(i, save_result=True)
