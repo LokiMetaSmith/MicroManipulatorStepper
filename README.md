@@ -122,6 +122,16 @@ Please note that FreeCAD version **1.1.0dev** was used, and the files might not 
 
 STL files for printing can be found here: [STL Files](construction/STL_3D_Printing/)
 
+## ⚙ Testing & Simulation
+
+This project now includes Python scripts for unit testing CAD models, verifying kinematics, and setting up FEA simulations.
+See [tests/freecad_scripts/README.md](tests/freecad_scripts/README.md) for details.
+
+To run tests (requires FreeCAD):
+```bash
+freecadcmd tests/freecad_scripts/run_all_tests.py
+```
+
 ## ⚙ Kinematic Model
 
 The kinematic model is defined here: [kinematic_model_delta3d.cpp](firmware/MotionControllerRP/src/kinemtaic_models/kinematic_model_delta3d.cpp).
