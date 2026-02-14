@@ -6,7 +6,7 @@ from typing import Optional, List, Tuple
 import numpy as np
 from .serial_interface import SerialInterface
 from .mock_serial_interface import MockSerialInterface
-from .types import CalibrationResult
+from .types import CalibrationResult, DeviceState, JointState
 
 logger = logging.getLogger(__name__)
 
@@ -217,9 +217,53 @@ class OpenMicroStageInterface:
                 angles.append(float(match.group(1)))
         return angles
 
-    def read_device_state_info(self) -> SerialInterface.ReplyStatus:
+    def read_device_state_info(self) -> Optional[DeviceState]:
         res, msg = self.serial.send_command("M57")
-        return res
+        if res != SerialInterface.ReplyStatus.OK:
+            return None
+
+        joints = []
+        servo_loop_rate = 0.0
+        motion_controller_rate = 0.0
+        files = []
+        reading_files = False
+
+        for line in msg.splitlines():
+            stripped = line.strip()
+            if not stripped: continue
+
+            if stripped == "ok":
+                break
+
+            if stripped.startswith("Joint"):
+                # Example: "Joint 0:  is_homed=1  is_calibrated=1  encoder_angle=123.45 deg"
+                is_homed = "is_homed=1" in stripped
+                is_calibrated = "is_calibrated=1" in stripped
+
+                angle_match = re.search(r"encoder_angle=([-+]?\d*\.?\d+)", stripped)
+                angle = float(angle_match.group(1)) if angle_match else 0.0
+
+                joints.append(JointState(is_homed, is_calibrated, angle))
+
+            elif stripped.startswith("Servo Loop:"):
+                # "Servo Loop: 10 kHz"
+                match = re.search(r"Servo Loop:\s+(\d+)", stripped)
+                if match:
+                    servo_loop_rate = float(match.group(1))
+
+            elif stripped.startswith("Motion Controler:"):
+                # "Motion Controler: 1000 Hz"
+                match = re.search(r"Motion Controler:\s+(\d+)", stripped)
+                if match:
+                    motion_controller_rate = float(match.group(1))
+
+            elif stripped.startswith("Files on flash:"):
+                reading_files = True
+
+            elif reading_files:
+                files.append(stripped)
+
+        return DeviceState(joints, servo_loop_rate, motion_controller_rate, files)
 
     def set_servo_parameter(self, pos_kp: float = 150, pos_ki: float = 50000, vel_kp: float = 0.2, vel_ki: float = 100, vel_filter_tc: float = 0.0025) -> SerialInterface.ReplyStatus:
         cmd = f"M55 A{pos_kp:.6f} B{pos_ki:.6f} C{vel_kp:.6f} D{vel_ki:.6f} F{vel_filter_tc:.6f}"

@@ -92,6 +92,17 @@ class MockSerialInterface:
              if match_y: self.position[1] = float(match_y.group(1))
              if match_z: self.position[2] = float(match_z.group(1))
 
+        elif cmd.startswith("M57"):
+             # Mock M57 response
+             lines = []
+             for i in range(3):
+                 lines.append(f"Joint {i}:  is_homed=1  is_calibrated=1  encoder_angle={self.position[i]*10.0:.2f} deg")
+             lines.append("Servo Loop: 10 kHz")
+             lines.append("Motion Controler: 1000 Hz")
+             lines.append("Files on flash: ")
+             lines.append("  test_file.dat")
+             response_content = "\n".join(lines) + "\n"
+
         if self.command_msg_callback:
             self.command_msg_callback(response_content, response_status, error_msg)
 
