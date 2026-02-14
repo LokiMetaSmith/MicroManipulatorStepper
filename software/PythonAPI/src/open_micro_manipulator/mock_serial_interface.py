@@ -46,6 +46,15 @@ class MockSerialInterface:
              response_content = "v1.0.1"
         elif cmd.startswith("M50"):
              response_content = f"X{self.position[0]:.6f} Y{self.position[1]:.6f} Z{self.position[2]:.6f}"
+        elif cmd.startswith("M51"):
+             # Mock M51 response
+             lines = []
+             for i in range(3):
+                 # Fake angle: current position * 10 + offset
+                 angle = self.position[i] * 10.0 + (i * 15.0)
+                 raw = angle * 100.0
+                 lines.append(f"Joint {i}:  {angle:.4f} deg  (raw={raw:.4f})")
+             response_content = "\n".join(lines)
         elif cmd.startswith("M53"):
              response_content = "1"
         elif cmd.startswith("G0") or cmd.startswith("G1"):
