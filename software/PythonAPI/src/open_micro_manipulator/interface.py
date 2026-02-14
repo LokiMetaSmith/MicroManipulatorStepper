@@ -1,4 +1,5 @@
 import re
+import time
 import logging
 from enum import Enum
 from typing import Optional, List, Tuple
@@ -105,7 +106,7 @@ class OpenMicroStageInterface:
             axis_list = [i for i in range(len(axis_chars))]
 
         for axis_idx in axis_list:
-            if 0 > axis_idx >= len(axis_chars):
+            if axis_idx < 0 or axis_idx >= len(axis_chars):
                 raise ValueError('Axis index out of range')
             cmd += ' '+axis_chars[axis_idx]
 
@@ -176,13 +177,16 @@ class OpenMicroStageInterface:
         disable_message_callbacks_prev = self.disable_message_callbacks
         if disable_callbacks: self.disable_message_callbacks = True
 
-        while True:
-            res, msg = self.serial.send_command("M53\n")
-            if res != SerialInterface.ReplyStatus.OK: return res
-            elif msg.strip() == "1":
-                return SerialInterface.ReplyStatus.OK
-
-        self.disable_message_callbacks = disable_message_callbacks_prev
+        try:
+            while True:
+                res, msg = self.serial.send_command("M53\n")
+                if res != SerialInterface.ReplyStatus.OK: return res
+                elif msg.strip() == "1":
+                    return SerialInterface.ReplyStatus.OK
+                time.sleep(polling_interval_ms / 1000.0)
+        finally:
+            if disable_callbacks:
+                self.disable_message_callbacks = disable_message_callbacks_prev
 
     def read_current_position(self) -> Tuple[Optional[float], Optional[float], Optional[float]]:
         ok, response = self.serial.send_command("M50")
@@ -204,7 +208,14 @@ class OpenMicroStageInterface:
         ok, response = self.serial.send_command("M51")
         if ok != SerialInterface.ReplyStatus.OK or len(response) == 0:
             return []
-        return []
+
+        angles = []
+        for line in response.splitlines():
+            # Example format: "Joint 0:  123.456 deg  (raw=789.012)"
+            match = re.search(r"Joint\s+\d+:\s+([-+]?\d*\.?\d+)\s+deg", line)
+            if match:
+                angles.append(float(match.group(1)))
+        return angles
 
     def read_device_state_info(self) -> SerialInterface.ReplyStatus:
         res, msg = self.serial.send_command("M57")
