@@ -145,5 +145,5 @@ def main():
 
     print("Export complete.")
 
-if __name__ in ("__main__", "__builtin__", "FreeCAD"):
-    main()
+# Run unconditionally since this is a standalone script
+main()
