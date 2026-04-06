@@ -101,7 +101,7 @@ void main_core0() {
 }
 
 void main_core1() {
-  LOG_INFO("Starting servo controll loops on core 1...");
+  LOG_INFO("Starting CAN bus task on core 1...");
 
   uint64_t last_time = time_us_64();
   while(true) {
@@ -111,10 +111,13 @@ void main_core1() {
     last_time = time_us;
 
     // limit time delta
-    dt = std::min(dt, 0.0001f);
+    dt = std::min(dt, 0.005f);
 
-    // update servo loops
+    // Poll and push CAN messages for remote CLN nodes
     robot.update_servo_controllers(dt);
+
+    // Slight delay to prevent saturating the CAN bus
+    sleep_ms(1);
   }
 }
 

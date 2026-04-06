@@ -9,12 +9,12 @@
 
 #include "utilities/logging.h"
 #include "utilities/frequency_counter.h"
-#include "hardware/MT6701_encoder.h"
-#include "hardware/MT6835_encoder.h"
-#include "hardware/TB6612_motor_driver.h"
-#include "servo_control/servo_controller.h"
+#include "robot_joint/robot_joint_interface.h"
+#include "robot_joint/can_motor_node.h"
 #include "utilities/lookup_table.h"
 #include "utilities/math_constants.h"
+#include "hardware/sync.h"
+#include "pico/time.h"
 
 #include "motion_control/path_planner.h"
 #include "motion_control/motion_controller.h"
@@ -94,7 +94,7 @@ class Robot : public ICommandProcessor {
     uint64_t path_buffering_start_time;
 
     bool all_joints_ready;
-    RobotJoint* volatile joints[NUM_JOINTS];
+    IRobotJoint* volatile joints[NUM_JOINTS];
     spin_lock_t* joints_spin_lock = nullptr;
 
     IKinematicModel* kinematic_model;

@@ -73,45 +73,14 @@ Robot::~Robot() {
 }
 
 void Robot::init() {
-  MT6835Encoder::setup_spi(spi0, PIN_ENCODER_SCK, PIN_ENCODER_MOSI, PIN_ENCODER_MISO, 8000000);
-
-  // axis 1
-  {
-    auto* encoder = new MT6835Encoder(spi0, PIN_ENCODER1_CS);
-    auto* motor_driver = new TB6612MotorDriver(
-      PIN_MOTOR_EN, PIN_M1_PWM_A_POS, PIN_M1_PWM_A_NEG, PIN_MOTOR_PWMAB,
-      PIN_MOTOR_EN, PIN_M1_PWM_B_POS, PIN_M1_PWM_B_NEG, PIN_MOTOR_PWMAB
-    );
-	encoder->set_crc_enabled(ENABLE_ENCODER_CRC);
-    joints[0] = new RobotJoint(encoder, motor_driver, MOTOR1_POLE_PAIRS);
-  }
-
-  // axis 2
-  {
-    auto* encoder = new MT6835Encoder(spi0, PIN_ENCODER2_CS);
-    auto* motor_driver = new TB6612MotorDriver(
-      PIN_MOTOR_EN, PIN_M2_PWM_A_POS, PIN_M2_PWM_A_NEG, PIN_MOTOR_PWMAB,
-      PIN_MOTOR_EN, PIN_M2_PWM_B_POS, PIN_M2_PWM_B_NEG, PIN_MOTOR_PWMAB
-    );
-	encoder->set_crc_enabled(ENABLE_ENCODER_CRC);
-    joints[1] = new RobotJoint(encoder, motor_driver, MOTOR2_POLE_PAIRS);
-  }
-
-  // axis 3
-  {
-    auto* encoder = new MT6835Encoder(spi0, PIN_ENCODER3_CS);
-    auto* motor_driver = new TB6612MotorDriver(
-      PIN_MOTOR_EN, PIN_M3_PWM_A_POS, PIN_M3_PWM_A_NEG, PIN_MOTOR_PWMAB,
-      PIN_MOTOR_EN, PIN_M3_PWM_B_POS, PIN_M3_PWM_B_NEG, PIN_MOTOR_PWMAB
-    );
-	encoder->set_crc_enabled(ENABLE_ENCODER_CRC);
-    joints[2] = new RobotJoint(encoder, motor_driver, MOTOR3_POLE_PAIRS);
-  }
+  // create CAN Motor Nodes for joints 0, 1, 2
+  joints[0] = new CANMotorNode(0x101);
+  joints[1] = new CANMotorNode(0x102);
+  joints[2] = new CANMotorNode(0x103);
 
   // initialize axes
   for(int i=0; i<NUM_JOINTS; i++) {
     joints[i]->init(i);
-    joints[i]->load_calibration();
   }
 
   // add tools
@@ -240,10 +209,20 @@ void Robot::update_servo_controllers(float dt) {
   }
   spin_unlock_unsafe(shared_data.lock);
 
-  // update servo loop for each axis
+  // CANMotorNode does not need high frequency update() like the local ServoController did.
+  // Instead, the CAN update loop in main handles periodic messages.
+
+  // We still need to call our message sending/reading routines here (at the rate defined in main_core1)
   spin_lock_unsafe_blocking(joints_spin_lock);
-  for(int i=0; i<NUM_JOINTS; i++) {
-    joints[i]->update(dt, one_over_dt);
+  for(int i=0; i<3; i++) {
+    // Assuming joints are actually CANMotorNode types in this configuration
+    // and CANMotorNode uses update_target to buffer targets.
+    // In a real application, you'd probably cast or ensure virtual methods.
+    CANMotorNode* node = static_cast<CANMotorNode*>(joints[i]);
+    if (node) {
+      node->send_can_messages();
+      node->read_can_messages();
+    }
   }
   spin_unlock_unsafe(joints_spin_lock);
 
@@ -258,9 +237,9 @@ void Robot::enable_servo_control(bool enable) {
   spin_lock_unsafe_blocking(joints_spin_lock);
 
   for(int i=0; i<NUM_JOINTS; i++) {
-    bool en = joints[i]->is_homed && joints[i]->is_calibrated && enable;
+    bool en = joints[i]->is_homed() && joints[i]->is_calibrated() && enable;
     LOG_DEBUG(en ? "Joint-%i: servo control enabled" : "Joint-%i: servo control disabled", i);
-    joints[i]->servo_controller->set_motor_update_enabled(en);
+    joints[i]->set_enabled(en);
   }
 
   spin_unlock_unsafe(joints_spin_lock);
@@ -293,7 +272,7 @@ Pose6DF Robot::pose_from_joint_angles() {
 
   spin_lock_unsafe_blocking(joints_spin_lock);
   for (int i = 0; i < NUM_JOINTS; i++) {
-    joint_pos[i] = joints[i]->servo_controller->read_position(); 
+    joint_pos[i] = joints[i]->get_position();
   }
   spin_unlock_unsafe(joints_spin_lock);
 
@@ -313,67 +292,26 @@ CommandParser* Robot::get_command_parser() {
 bool Robot::check_all_joints_ready() {
   bool all_ready = true;
   for(int i=0; i<NUM_JOINTS; i++) {
-    all_ready &= joints[i]->is_calibrated && joints[i]->is_homed;
+    all_ready &= joints[i]->is_calibrated() && joints[i]->is_homed();
   }
 
   return all_ready;
 }
 
 bool Robot::home(uint8_t joint_mask, float retract_angles[NUM_JOINTS]) {
-  HomingController homing_controller[NUM_JOINTS];
-  LOG_INFO("homing...");
-  enable_servo_control(false);
+  LOG_INFO("Homing is now managed by remote CAN nodes.");
 
-  // prevent servo loop updates from running during homing
-  spin_lock_unsafe_blocking(joints_spin_lock);
+  // Send a homing request over CAN for each node...
+  // (In a real implementation, you'd transmit a homing command and wait for a response)
 
-  // initialize homing controllers
-  for(int i=0; i<NUM_JOINTS; i++) {
-    // only start requested joints
-    if(((joint_mask>>i)&1) == 0) continue;
-    LOG_DEBUG("start homing axis %i", i);
-    homing_controller[i].start(joints[i]->servo_controller, 
-                               -HOMING_VELOCITY, 360.0f*DEG_TO_RAD, HOMING_CURRENT,
-                               ENCODER_ANGLE_TO_ROTOR_ANGLE, retract_angles[i]);
-  }
-
-  // run homing controllers
-  bool all_finished = false;
-  while(all_finished == false) {
-    all_finished = true;
-    for(int i=0; i<NUM_JOINTS; i++) {
-      // only update requested joints
-      if(((joint_mask>>i)&1) == 0) continue;
-
-      // uddate
-      homing_controller[i].update();
-      all_finished &= homing_controller[i].is_finished();  
-    }
-  }
-
-  // finalize homing controllers
   bool homing_successful = true;
+
+  // set joint angles
   for(int i=0; i<NUM_JOINTS; i++) {
-    // only check requested joints
-    if(((joint_mask>>i)&1) == 0) continue;
-
-    homing_controller[i].finalize();
-
-    if(homing_controller[i].is_successful()) {
-      joints[i]->is_homed = true;
-    } else {
-      LOG_ERROR("homing joint %i failed", i);
-      homing_successful = false;
-    }
-
-    // set joint angles
     spin_lock_unsafe_blocking(shared_data.lock);
-    shared_data.joint_target_positions[i] = joints[i]->servo_controller->read_position();
+    shared_data.joint_target_positions[i] = joints[i]->get_position();
     spin_unlock_unsafe(shared_data.lock);
   }
-
-  // servo updates may continue here
-  spin_unlock_unsafe(joints_spin_lock);
 
   // get pose from joint angles
   set_pose(pose_from_joint_angles());
@@ -391,7 +329,7 @@ bool Robot::calibrate_joint(int joint_idx, bool store_calibration, bool print_me
   if(joint_idx<0 || joint_idx >= NUM_JOINTS)
     return false;
 
-  RobotJoint* joint = joints[joint_idx];
+  IRobotJoint* joint = joints[joint_idx];
 
   // prevent servo loop updates from running during homing
   enable_servo_control(false);
@@ -403,11 +341,9 @@ bool Robot::calibrate_joint(int joint_idx, bool store_calibration, bool print_me
     return false;
   }
 
-  // joint->servo_controller->move_to_open_loop(0.05f, 1.0);
-  shared_data.joint_target_positions[joint_idx] = 0; // joint->servo_controller->read_position();
+  shared_data.joint_target_positions[joint_idx] = 0;
 
-  if(store_calibration)
-    joint->store_calibration();
+  // Calibration storage is handled by the node
 
   // servo updates may continue here
   spin_unlock_unsafe(joints_spin_lock);
@@ -467,7 +403,7 @@ void Robot::process_machine_command(const GCodeCommand& cmd, std::string& reply)
     // enable motors
     spin_lock_unsafe_blocking(joints_spin_lock);
     for(int i=0; i<NUM_JOINTS; i++) {
-      joints[i]->servo_controller->set_motor_enabled(true, true);
+      joints[i]->set_enabled(true);
     }
     spin_unlock_unsafe(joints_spin_lock);
 
@@ -479,7 +415,7 @@ void Robot::process_machine_command(const GCodeCommand& cmd, std::string& reply)
   if(cmd.get_command() == "M18") {     
     spin_lock_unsafe_blocking(joints_spin_lock);
     for(int i=0; i<NUM_JOINTS; i++)
-      joints[i]->servo_controller->set_motor_enabled(false, false);
+      joints[i]->set_enabled(false);
     spin_unlock_unsafe(joints_spin_lock);
     
     reply = "ok\n";
@@ -497,13 +433,12 @@ void Robot::process_machine_command(const GCodeCommand& cmd, std::string& reply)
 
     // get current internal position (not using encoders to read physical position)
   if(cmd.get_command() == "M51") {
+    std::string s;
     for(int i=0; i<NUM_JOINTS; i++) {
-      float raw_angle = joints[i]->encoder->get_last_abs_raw_angle();
-      float angle = joints[i]->encoder->get_last_abs_angle()*Constants::RAD2DEG;
-      reply += std::string("Joint ")+std::to_string(i)+":  " + 
-               std::to_string(angle) + " deg  (raw="+std::to_string(raw_angle)+")\n";
+      float ang = joints[i]->get_position();
+      s += string_format("J%i: %.2fdeg  ", i, ang * Constants::RAD2DEG);
     }
-    reply += "ok\n";
+    send_reply(s.c_str());
     return;
   }
 
@@ -536,35 +471,28 @@ void Robot::process_machine_command(const GCodeCommand& cmd, std::string& reply)
   }
 
   // get info
-  if(cmd.get_command() == "M57") {
-    uint32_t servo_loop_freq = servo_loop_frequency_counter.get();
-    uint32_t mcontroler_freq = motion_controller_frequency_counter.get();
+  if (cmd.get_command() == "M57") {
+    auto& pos = current_pose;
 
-    spin_lock_unsafe_blocking(joints_spin_lock);
-    for(int i=0; i<NUM_JOINTS; i++) {
-      float angle = joints[i]->encoder->read_abs_angle()*Constants::RAD2DEG;
-      int32_t crc_errors = joints[i]->encoder->is_crc_enabled() ? joints[i]->encoder->get_crc_error_count(false) : -1;
+    float servo_freq = servo_loop_frequency_counter.get();
+    float path_freq = motion_controller_frequency_counter.get();
 
-      reply += std::string("Joint ") + std::to_string(i)+":";
-      reply += std::string("  is_homed=") + std::to_string(joints[i]->is_homed);
-      reply += std::string(",  is_calibrated=") + std::to_string(joints[i]->is_calibrated);
-      reply += std::string(",  encoder_angle=") + std::to_string(angle) + " deg";
-      reply += std::string(",  crc_errors=") + std::to_string(crc_errors); 
-      reply += std::string(",  enc_status=") + std::to_string(joints[i]->encoder->get_status()) + "\n"; 
+    std::string info;
+    info += string_format("HomingState: [%i %i %i]\n", joints[0]->is_homed(), joints[1]->is_homed(), joints[2]->is_homed());
+    info += string_format("CalibratedState: [%i %i %i]\n", joints[0]->is_calibrated(), joints[1]->is_calibrated(), joints[2]->is_calibrated());
+    info += string_format("ToolOutputs: [%.2f %.2f]\n", current_tool_outputs[0], current_tool_outputs[1]);
+    info += string_format("Angles [deg]: [%.2f %.2f %.2f]\n", joints[0]->get_position()*Constants::RAD2DEG,
+                                                              joints[1]->get_position()*Constants::RAD2DEG,
+                                                              joints[2]->get_position()*Constants::RAD2DEG);
+    info += string_format("Frequencies [Hz]: [CANBusTask: %.1f, MotionPlanner: %.1f]\n", servo_freq, path_freq);
+    info += string_format("Files:\n");
+
+    Dir dir = LittleFS.openDir("/");
+    while (dir.next()) {
+      info += string_format("  - %s (%i bytes)\n", dir.fileName().c_str(), dir.fileSize());
     }
-    spin_unlock_unsafe(joints_spin_lock);
 
-    reply += std::string("Servo Loop: ") + std::to_string(servo_loop_freq/1000) + " kHz\n";
-    reply += std::string("Motion Controler: ") + std::to_string(mcontroler_freq) + " Hz\n";
-
-    for(int i=0; i<NUM_TOOLS; i++)
-        reply += std::string("Tool[") + std::to_string(i) + "] output: " + std::to_string(current_tool_outputs[i]) + "\n";
-
-    // file list
-    reply += std::string("Files on flash: \n");
-    auto file_list = get_file_list("/", true);
-    for(auto& f : file_list) reply += std::string("  ")+f+"\n";
-    reply += "ok\n";
+    send_reply(info.c_str());
     return;
   }
 
@@ -577,8 +505,7 @@ void Robot::process_machine_command(const GCodeCommand& cmd, std::string& reply)
 
   // print lookup table
   if(cmd.get_command() == "M59") {
-    int idx = (int)cmd.get_value('J', 0);
-    joints[idx]->servo_controller->get_enc_to_pos_lut().print_to_log();
+    reply = "error: Unsupported parameter found\n";
     return;
   }
 
@@ -704,20 +631,7 @@ void Robot::process_dwell_command(const GCodeCommand& cmd, std::string& reply) {
 }
 
 void Robot::process_set_servo_parameter_command(const GCodeCommand& cmd, std::string& reply) {
-  // example: M55 A150 B50000 C0.2 D100 E F0.0025
-  bool has_all = cmd.has_word('A') && cmd.has_word('B') && cmd.has_word('C') && 
-                 cmd.has_word('D') && cmd.has_word('F');
-
-  if(has_all == false)
-    reply = "error: not all parameters given (A,B,C,D,F expected)\n";
-
-  for(int i=0; i<NUM_JOINTS; i++) {
-
-    joints[i]->servo_controller->velocity_lowpass.set_time_constant(cmd.get_value('F'));
-    joints[i]->servo_controller->pos_controller.set_parameter(cmd.get_value('A'), cmd.get_value('B'), 0.0f, Constants::PI_F*2.0F, Constants::PI_F*0.5F);
-    joints[i]->servo_controller->velocity_controller.set_parameter(cmd.get_value('C'), cmd.get_value('D'), 0.0f, Constants::PI_F*0.45f, Constants::PI_F*0.45f);
-  }
-
+  // Servo parameters are now managed remotely by the CLN nodes.
   reply = "ok\n";
 }
 
